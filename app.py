@@ -5,17 +5,13 @@ import threading
 
 app = Flask(__name__)
 
-# ===============================
-# 配置
-# ===============================
 LINE_TOKEN = os.getenv("LINE_TOKEN")
 
-# 全域使用者資料
+# 使用記憶體儲存每個使用者資料
 users = {}
 lock = threading.Lock()
 
 def get_user(uid):
-    """取得或建立使用者資料"""
     with lock:
         if uid not in users:
             users[uid] = {
@@ -30,11 +26,9 @@ def get_user(uid):
 
 
 # ===============================
-# 工具函數
+# LINE 回覆
 # ===============================
-
 def reply(token, msgs):
-    """回覆 LINE 訊息"""
     url = "https://api.line.me/v2/bot/message/reply"
     headers = {
         "Content-Type": "application/json",
@@ -44,43 +38,116 @@ def reply(token, msgs):
     if isinstance(msgs, dict):
         msgs = [msgs]
 
-    data = {
-        "replyToken": token,
-        "messages": msgs
-    }
+    body = {"replyToken": token, "messages": msgs}
 
-    requests.post(url, headers=headers, json=data)
-
-
-def fix1(num):
-    """固定小數點 1 位"""
-    return float(f"{num:.1f}")
+    requests.post(url, headers=headers, json=body)
 
 
 # ===============================
-# Webhook 主處理
+# Flex UI － 主選單
+# ===============================
+def main_menu():
+    return {
+        "type": "flex",
+        "altText": "選單",
+        "contents": {
+            "type": "bubble",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {"type": "text", "text": "操作選單", "weight": "bold", "size": "lg"}
+                ]
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "md",
+                "contents": [
+                    btn("🔢 輸入支數", "輸入支數"),
+                    btn("📋 列表", "列表"),
+                    btn("✏ 編輯", "編輯"),
+                    btn("🔚 結束", "結束"),
+                    btn("ℹ️ 說明", "說明"),
+                ]
+            }
+        }
+    }
+
+
+def btn(label, data):
+    return {
+        "type": "button",
+        "style": "primary",
+        "action": {
+            "type": "message",
+            "label": label,
+            "text": data
+        }
+    }
+
+
+# ===============================
+# Flex UI － 計算結果
+# ===============================
+def result_card(name, total, bonus):
+    return {
+        "type": "flex",
+        "altText": "計算結果",
+        "contents": {
+            "type": "bubble",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {"type": "text", "text": "✨ 計算完成", "size": "xl", "weight": "bold"}
+                ]
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "md",
+                "contents": [
+                    line("姓名", name),
+                    line("總支數", f"{total:.1f}"),
+                    line("獎金 (×76)", f"{bonus:.1f} 元")
+                ]
+            }
+        }
+    }
+
+
+def line(label, value):
+    return {
+        "type": "box",
+        "layout": "horizontal",
+        "contents": [
+            {"type": "text", "text": label, "weight": "bold", "size": "sm", "flex": 2},
+            {"type": "text", "text": value, "size": "sm", "flex": 3}
+        ]
+    }
+
+
+# ===============================
+# Utility
+# ===============================
+def fix1(x):
+    return float(f"{x:.1f}")
+
+
+# ===============================
+# Webhook
 # ===============================
 @app.route("/webhook", methods=["POST"])
 def webhook():
     body = request.json
 
-    # ----------- 防呆：body 不存在 -----------
-    if body is None:
+    # 空事件防呆
+    if not body or "events" not in body or not body["events"]:
         return "OK"
 
-    # ----------- 防呆：無 events -----------
-    if "events" not in body:
-        return "OK"
+    event = body["events"][0]
 
-    events = body["events"]
-
-    # ----------- 防呆：events[] 空陣列 -----------
-    if not events:
-        return "OK"
-
-    event = events[0]
-
-    # ----------- 防呆：不是文字訊息 -----------
     if event.get("type") != "message":
         return "OK"
 
@@ -88,34 +155,33 @@ def webhook():
     if message.get("type") != "text":
         return "OK"
 
-    text = message.get("text", "").strip()
+    text = message["text"].strip()
     token = event["replyToken"]
     uid = event["source"]["userId"]
 
     user = get_user(uid)
 
-    # ===============================
+    # ==========================================
     # 說明
-    # ===============================
+    # ==========================================
     if text == "說明":
         reply(token, {
             "type": "text",
-            "text":
-            "【獎金計算小幫手 - 使用說明】\n\n"
-            "指令：\n"
-            "• 開始：重新開始流程\n"
-            "• 列表：看目前輸入的支數\n"
-            "• 編輯：修改或刪除資料\n"
-            "• 結束：進入預覽與計算獎金\n"
-            "• 說明：顯示本說明\n\n"
-            "獎金計算公式：總支數 × 76"
+            "text": (
+                "【獎金計算小幫手】\n\n"
+                "流程：\n"
+                "1️⃣ 輸入姓名\n"
+                "2️⃣ 輸入支數\n"
+                "3️⃣ 列表 / 編輯\n"
+                "4️⃣ 結束 → 計算獎金\n"
+            )
         })
         return "OK"
 
-    # ===============================
-    # 開始 / 首頁 → 重置流程
-    # ===============================
-    if text in ["開始", "首頁"]:
+    # ==========================================
+    # 開始
+    # ==========================================
+    if text == "開始":
         users[uid] = {
             "step": "name",
             "name": None,
@@ -125,130 +191,139 @@ def webhook():
             "confirmMode": False
         }
 
-        reply(token, {"type": "text", "text": "🟦 步驟 1：請輸入姓名"})
+        reply(token, [
+            {"type": "text", "text": "🟦 步驟 1：請輸入姓名"},
+            main_menu()
+        ])
         return "OK"
 
-    # ===============================
-    # 編輯模式（最高優先權）
-    # ===============================
+    # ==========================================
+    # 如果在編輯模式 → 最高優先
+    # ==========================================
     if user["editMode"]:
-        return handle_edit_mode(uid, user, text, token)
+        return handle_edit(uid, user, text, token)
 
-    # ===============================
-    # 結束確認模式
-    # ===============================
+    # ==========================================
+    # 確認模式
+    # ==========================================
     if user["confirmMode"]:
-        return handle_confirm_mode(uid, user, text, token)
+        return handle_confirm(uid, user, text, token)
 
-    # ===============================
-    # Step 1：輸入姓名
-    # ===============================
+    # ==========================================
+    # Step 1：輸入姓名（v3 修正版）
+    # ==========================================
     if user["step"] == "name":
-    
-        # 禁止在姓名階段輸入指令
-        forbidden = ["列表", "編輯", "結束", "返回", "說明"]
+        forbidden = ["列表", "編輯", "結束", "返回", "說明", "輸入支數"]
+
         if text in forbidden:
             reply(token, {
                 "type": "text",
-                "text": "現在在【輸入姓名】階段，請直接輸入姓名（不可使用指令）。"
+                "text": "現在是【輸入姓名】階段，請輸入姓名（不能輸入指令）。"
             })
             return "OK"
-    
-        # 不能空白
-        if text == "":
-            reply(token, {
-                "type": "text",
-                "text": "姓名不可為空白，請重新輸入。"
-            })
+
+        if not text:
+            reply(token, {"type": "text", "text": "姓名不可為空白，請重新輸入。"})
             return "OK"
-    
-        # 設定姓名並進入下一階段
+
         user["name"] = text
         user["step"] = "input"
-    
-        reply(token, {
-            "type": "text",
-            "text": f"👤 姓名：{text}\n\n🟩 步驟 2：請開始輸入支數（可含小數）\n可用指令：列表 / 編輯 / 結束"
-        })
+
+        reply(token, [
+            {"type": "text", "text": f"👤 姓名：{text}\n\n請開始輸入支數。"},
+            main_menu()
+        ])
         return "OK"
 
-    # ===============================
+    # ==========================================
     # 列表
-    # ===============================
+    # ==========================================
     if text == "列表":
-        return handle_list(user, token)
+        nums = user["numbers"]
+        if not nums:
+            reply(token, {"type": "text", "text": "📋 尚未輸入任何支數。"})
+            return "OK"
 
-    # ===============================
-    # 進入編輯模式
-    # ===============================
+        s = "📋【目前支數】\n\n"
+        for i, n in enumerate(nums):
+            s += f"{i+1}) {n:.1f}\n"
+
+        s += f"\n合計：{sum(nums):.1f}\n共 {len(nums)} 筆"
+
+        reply(token, [
+            {"type": "text", "text": s},
+            main_menu()
+        ])
+        return "OK"
+
+    # ==========================================
+    # 進入編輯
+    # ==========================================
     if text == "編輯":
         if not user["numbers"]:
             reply(token, {"type": "text", "text": "目前沒有資料可編輯。"})
             return "OK"
 
         user["editMode"] = "selectIndex"
-        reply(token, {
-            "type": "text",
-            "text": "🔧 請輸入要編輯的筆數（例如：1）\n或輸入「返回」離開編輯模式。"
-        })
+        reply(token, {"type": "text", "text": "請輸入要編輯的筆數（例：1）"})
         return "OK"
 
-    # ===============================
-    # 結束 → 預覽
-    # ===============================
+    # ==========================================
+    # 結束
+    # ==========================================
     if text == "結束":
-        return enter_preview(uid, user, token)
+        if not user["numbers"]:
+            reply(token, {"type": "text", "text": "目前沒有資料可結束。"})
+            return "OK"
 
-    # ===============================
+        # 預覽
+        nums = user["numbers"]
+        s = "📋【結束前預覽】\n\n"
+        for i, n in enumerate(nums):
+            s += f"{i+1}) {n:.1f}\n"
+
+        s += f"\n合計：{sum(nums):.1f}\n\n請回覆：確認 / 取消"
+
+        user["confirmMode"] = True
+        reply(token, {"type": "text", "text": s})
+        return "OK"
+
+    # ==========================================
     # Step 2：輸入支數
-    # ===============================
-    return handle_number_input(uid, user, text, token)
-
-
+    # ==========================================
+    return handle_number(uid, user, text, token)
 # ===============================
 # 支數輸入
 # ===============================
-def handle_number_input(uid, user, text, token):
+def handle_number(uid, user, text, token):
+    # 禁止文字指令誤觸
+    forbidden = ["編輯", "列表", "結束", "返回", "說明"]
+    if text in forbidden:
+        reply(token, {
+            "type": "text",
+            "text": "輸入支數時不可使用指令喔。"
+        })
+        return "OK"
+
     try:
         v = fix1(float(text))
     except:
-        reply(token, {"type": "text", "text": "請輸入數字（可含小數）。"})
+        reply(token, {"type": "text", "text": "請輸入有效的數字（可含小數）。"})
         return "OK"
 
     user["numbers"].append(v)
 
-    reply(token, {
-        "type": "text",
-        "text": f"✔ 已加入：{v:.1f}\n目前共有 {len(user['numbers'])} 筆。"
-    })
-    return "OK"
-
-
-# ===============================
-# 列表
-# ===============================
-def handle_list(user, token):
-    nums = user["numbers"]
-
-    if not nums:
-        reply(token, {"type": "text", "text": "📋 尚未輸入任何支數。"})
-        return "OK"
-
-    text = "📋【目前支數】\n\n"
-    for i, n in enumerate(nums):
-        text += f"{i+1}) {n:.1f}\n"
-
-    total = sum(nums)
-    text += f"\n合計：{total:.1f}\n共 {len(nums)} 筆"
-
-    reply(token, {"type": "text", "text": text})
+    reply(token, [
+        {"type": "text", "text": f"✔ 已加入：{v:.1f}\n目前共有 {len(user['numbers'])} 筆。"},
+        main_menu()
+    ])
     return "OK"
 
 
 # ===============================
 # 編輯模式
 # ===============================
-def handle_edit_mode(uid, user, text, token):
+def handle_edit(uid, user, text, token):
     mode = user["editMode"]
     nums = user["numbers"]
 
@@ -259,17 +334,14 @@ def handle_edit_mode(uid, user, text, token):
         reply(token, {"type": "text", "text": "已退出編輯模式。"})
         return "OK"
 
-    # 選筆數
+    # 選擇哪一筆
     if mode == "selectIndex":
         try:
             i = int(text) - 1
             if i < 0 or i >= len(nums):
                 raise Exception()
         except:
-            reply(token, {
-                "type": "text",
-                "text": f"請輸入 1 ~ {len(nums)} 的數字。"
-            })
+            reply(token, {"type": "text", "text": f"請輸入 1 ~ {len(nums)} 的編號"})
             return "OK"
 
         user["editIndex"] = i
@@ -277,103 +349,62 @@ def handle_edit_mode(uid, user, text, token):
 
         reply(token, {
             "type": "text",
-            "text": f"你選擇第 {i+1} 筆：{nums[i]:.1f}\n請輸入：「修改」或「刪除」"
+            "text": f"你選擇第 {i+1} 筆：{nums[i]:.1f}\n請輸入：修改 或 刪除"
         })
         return "OK"
 
-    # 選擇 修改 / 刪除
+    # 修改 or 刪除
     if mode == "chooseAction":
         if text == "刪除":
             removed = nums.pop(user["editIndex"])
             user["editMode"] = None
             user["editIndex"] = None
-
-            reply(token, {
-                "type": "text",
-                "text": f"✔ 已刪除：{removed:.1f}"
-            })
+            reply(token, {"type": "text", "text": f"✔ 已刪除：{removed:.1f}"})
             return "OK"
 
         if text == "修改":
             user["editMode"] = "inputValue"
-            reply(token, {
-                "type": "text",
-                "text": "請輸入新的數值（可含小數）："
-            })
+            reply(token, {"type": "text", "text": "請輸入新值："})
             return "OK"
 
-        reply(token, {
-            "type": "text",
-            "text": "請輸入：修改 / 刪除 / 返回"
-        })
+        reply(token, {"type": "text", "text": "請輸入：修改 或 刪除"})
         return "OK"
 
-    # 修改新值
+    # 新值輸入
     if mode == "inputValue":
         try:
             v = fix1(float(text))
         except:
-            reply(token, {
-                "type": "text",
-                "text": "請輸入有效數字。"
-            })
+            reply(token, {"type": "text", "text": "請輸入有效數字。"})
             return "OK"
 
         nums[user["editIndex"]] = v
         user["editMode"] = None
         user["editIndex"] = None
 
-        reply(token, {
-            "type": "text",
-            "text": f"✔ 已修改為：{v:.1f}"
-        })
+        reply(token, {"type": "text", "text": f"✔ 已修改為：{v:.1f}"})
         return "OK"
-
-
-# ===============================
-# 結束 → 預覽
-# ===============================
-def enter_preview(uid, user, token):
-    nums = user["numbers"]
-    if not nums:
-        reply(token, {"type": "text", "text": "目前沒有資料可結束。"})
-        return "OK"
-
-    text = "📋【結束前預覽】\n\n"
-    for i, n in enumerate(nums):
-        text += f"{i+1}) {n:.1f}\n"
-
-    total = sum(nums)
-    text += f"\n合計：{total:.1f}\n\n回覆：確認 / 取消"
-
-    user["confirmMode"] = True
-
-    reply(token, {"type": "text", "text": text})
-    return "OK"
 
 
 # ===============================
 # 確認模式
 # ===============================
-def handle_confirm_mode(uid, user, text, token):
+def handle_confirm(uid, user, text, token):
     if text == "取消":
         user["confirmMode"] = False
-        reply(token, {"type": "text", "text": "❌ 已取消結束，可繼續輸入資料。"})
+        reply(token, {"type": "text", "text": "已取消結束，可繼續輸入資料。"})
         return "OK"
 
     if text == "確認":
         total = sum(user["numbers"])
         bonus = total * 76
 
-        reply(token, {
-            "type": "text",
-            "text":
-            f"✨【計算完成】\n\n"
-            f"姓名：{user['name']}\n"
-            f"總支數：{total:.1f}\n"
-            f"獎金：{bonus:.1f} 元\n\n"
-            "如要再算一次請輸入：開始"
-        })
+        card = result_card(user["name"], total, bonus)
+
+        reply(token, [
+            card,
+            {"type": "text", "text": "如要再算一次請輸入：開始"}
+        ])
 
         # 重置
         users[uid] = {
@@ -386,13 +417,13 @@ def handle_confirm_mode(uid, user, text, token):
         }
         return "OK"
 
-    reply(token, {"type": "text", "text": "請輸入：確認 / 取消"})
+    reply(token, {"type": "text", "text": "請輸入：確認 或 取消"})
     return "OK"
 
 
+
 # ===============================
-# 本地測試用（Render 用不到）
+# 主程式（本地測試）
 # ===============================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
-
+    app.run(debug=True, port=5000)
