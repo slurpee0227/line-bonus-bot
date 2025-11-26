@@ -10,27 +10,31 @@ app = Flask(__name__)
 # ===============================
 LINE_TOKEN = os.getenv("LINE_TOKEN")
 
-# 全域使用者資料（Render 免費版可用）
+# 全域使用者資料
 users = {}
 lock = threading.Lock()
 
 def get_user(uid):
+    """取得或建立使用者資料"""
     with lock:
         if uid not in users:
             users[uid] = {
                 "step": "name",
                 "name": None,
                 "numbers": [],
-                "editMode": None,       # None / selectIndex / chooseAction / inputValue
+                "editMode": None,
                 "editIndex": None,
                 "confirmMode": False
             }
         return users[uid]
 
+
 # ===============================
 # 工具函數
 # ===============================
+
 def reply(token, msgs):
+    """回覆 LINE 訊息"""
     url = "https://api.line.me/v2/bot/message/reply"
     headers = {
         "Content-Type": "application/json",
@@ -49,20 +53,42 @@ def reply(token, msgs):
 
 
 def fix1(num):
+    """固定小數點 1 位"""
     return float(f"{num:.1f}")
 
+
 # ===============================
-# 主 Webhook
+# Webhook 主處理
 # ===============================
 @app.route("/webhook", methods=["POST"])
 def webhook():
     body = request.json
 
-    event = body["events"][0]
-    if event["type"] != "message" or event["message"]["type"] != "text":
+    # ----------- 防呆：body 不存在 -----------
+    if body is None:
         return "OK"
 
-    text = event["message"]["text"].strip()
+    # ----------- 防呆：無 events -----------
+    if "events" not in body:
+        return "OK"
+
+    events = body["events"]
+
+    # ----------- 防呆：events[] 空陣列 -----------
+    if not events:
+        return "OK"
+
+    event = events[0]
+
+    # ----------- 防呆：不是文字訊息 -----------
+    if event.get("type") != "message":
+        return "OK"
+
+    message = event.get("message", {})
+    if message.get("type") != "text":
+        return "OK"
+
+    text = message.get("text", "").strip()
     token = event["replyToken"]
     uid = event["source"]["userId"]
 
@@ -74,7 +100,15 @@ def webhook():
     if text == "說明":
         reply(token, {
             "type": "text",
-            "text": "【獎金計算小幫手】\n\n指令：\n• 開始\n• 列表\n• 編輯\n• 結束\n• 說明"
+            "text":
+            "【獎金計算小幫手 - 使用說明】\n\n"
+            "指令：\n"
+            "• 開始：重新開始流程\n"
+            "• 列表：看目前輸入的支數\n"
+            "• 編輯：修改或刪除資料\n"
+            "• 結束：進入預覽與計算獎金\n"
+            "• 說明：顯示本說明\n\n"
+            "獎金計算公式：總支數 × 76"
         })
         return "OK"
 
@@ -95,7 +129,7 @@ def webhook():
         return "OK"
 
     # ===============================
-    # 如果正在編輯模式 → 最優先
+    # 編輯模式（最高優先權）
     # ===============================
     if user["editMode"]:
         return handle_edit_mode(uid, user, text, token)
@@ -130,11 +164,14 @@ def webhook():
     # ===============================
     if text == "編輯":
         if not user["numbers"]:
-            reply(token, {"type": "text", "text": "尚無資料可編輯。"})
+            reply(token, {"type": "text", "text": "目前沒有資料可編輯。"})
             return "OK"
 
         user["editMode"] = "selectIndex"
-        reply(token, {"type": "text", "text": "🔧 請輸入要編輯的筆數（例如：1）\n或輸入「返回」離開編輯模式。"})
+        reply(token, {
+            "type": "text",
+            "text": "🔧 請輸入要編輯的筆數（例如：1）\n或輸入「返回」離開編輯模式。"
+        })
         return "OK"
 
     # ===============================
@@ -161,8 +198,10 @@ def handle_number_input(uid, user, text, token):
 
     user["numbers"].append(v)
 
-    reply(token, {"type": "text",
-                  "text": f"✔ 已加入：{v:.1f}\n目前共有 {len(user['numbers'])} 筆。"})
+    reply(token, {
+        "type": "text",
+        "text": f"✔ 已加入：{v:.1f}\n目前共有 {len(user['numbers'])} 筆。"
+    })
     return "OK"
 
 
@@ -208,7 +247,10 @@ def handle_edit_mode(uid, user, text, token):
             if i < 0 or i >= len(nums):
                 raise Exception()
         except:
-            reply(token, {"type": "text", "text": f"請輸入 1 ~ {len(nums)} 的數字。"})
+            reply(token, {
+                "type": "text",
+                "text": f"請輸入 1 ~ {len(nums)} 的數字。"
+            })
             return "OK"
 
         user["editIndex"] = i
@@ -220,22 +262,31 @@ def handle_edit_mode(uid, user, text, token):
         })
         return "OK"
 
-    # 選擇修改/刪除
+    # 選擇 修改 / 刪除
     if mode == "chooseAction":
         if text == "刪除":
             removed = nums.pop(user["editIndex"])
             user["editMode"] = None
             user["editIndex"] = None
 
-            reply(token, {"type": "text", "text": f"✔ 已刪除：{removed:.1f}"})
+            reply(token, {
+                "type": "text",
+                "text": f"✔ 已刪除：{removed:.1f}"
+            })
             return "OK"
 
         if text == "修改":
             user["editMode"] = "inputValue"
-            reply(token, {"type": "text", "text": "請輸入新的數值："})
+            reply(token, {
+                "type": "text",
+                "text": "請輸入新的數值（可含小數）："
+            })
             return "OK"
 
-        reply(token, {"type": "text", "text": "請輸入：修改 / 刪除"})
+        reply(token, {
+            "type": "text",
+            "text": "請輸入：修改 / 刪除 / 返回"
+        })
         return "OK"
 
     # 修改新值
@@ -243,14 +294,20 @@ def handle_edit_mode(uid, user, text, token):
         try:
             v = fix1(float(text))
         except:
-            reply(token, {"type": "text", "text": "請輸入有效數字。"})
+            reply(token, {
+                "type": "text",
+                "text": "請輸入有效數字。"
+            })
             return "OK"
 
         nums[user["editIndex"]] = v
         user["editMode"] = None
         user["editIndex"] = None
 
-        reply(token, {"type": "text", "text": f"✔ 已修改為：{v:.1f}"})
+        reply(token, {
+            "type": "text",
+            "text": f"✔ 已修改為：{v:.1f}"
+        })
         return "OK"
 
 
@@ -282,7 +339,7 @@ def enter_preview(uid, user, token):
 def handle_confirm_mode(uid, user, text, token):
     if text == "取消":
         user["confirmMode"] = False
-        reply(token, {"type": "text", "text": "已取消結束，可繼續輸入。"})
+        reply(token, {"type": "text", "text": "❌ 已取消結束，可繼續輸入資料。"})
         return "OK"
 
     if text == "確認":
@@ -291,7 +348,12 @@ def handle_confirm_mode(uid, user, text, token):
 
         reply(token, {
             "type": "text",
-            "text": f"✨【計算完成】\n\n姓名：{user['name']}\n總支數：{total:.1f}\n獎金：{bonus:.1f} 元\n\n如要再算一次請輸入：開始"
+            "text":
+            f"✨【計算完成】\n\n"
+            f"姓名：{user['name']}\n"
+            f"總支數：{total:.1f}\n"
+            f"獎金：{bonus:.1f} 元\n\n"
+            "如要再算一次請輸入：開始"
         })
 
         # 重置
@@ -310,7 +372,7 @@ def handle_confirm_mode(uid, user, text, token):
 
 
 # ===============================
-# 本地端啟動（Render 不會用到）
+# 本地測試用（Render 用不到）
 # ===============================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
